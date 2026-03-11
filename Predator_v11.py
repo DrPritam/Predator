@@ -221,7 +221,7 @@ class Config:
     VACUUM_RATIO         = 0.10
 
     EARLY_WIDEN_S        = 120.0
-    EARLY_WIDEN_MULT     = 1.00
+    EARLY_WIDEN_MULT     = 1.15
 
     WIDEN_MAX_MULT       = 2.00
     WIDEN_MIN_MULT       = 0.75
@@ -231,6 +231,10 @@ class Config:
     # Worst-case PnL can deviate from pnl_cache due to API lag.
     # Reserve buffer so halt fires before actual loss far exceeds limit.
     DRAWDOWN_BUFFER      = 500.0  # halt at DRAWDOWN_LIMIT + DRAWDOWN_BUFFER
+    DRAWDOWN_HYSTERESIS  = 1000.0  # resume trading only when PnL > halt_level + hysteresis
+
+    EOD_FLATTEN_RETRY_S  = 2.0   # retry market flatten every N seconds if still have inventory
+    EMERG_FLATTEN_RETRY_S = 2.0  # retry emergency flatten every N seconds
 
 
 def load_session_log(cfg):
@@ -897,6 +901,8 @@ class FillCallback:
                 except Exception:
                     continue
             if qty == 0:
+                print(f"[FillCB] WARNING: qty=0 after trying all attrs for order {order_id} "
+                      f"— fills may not be tracked!", file=sys.stderr)
                 return
             self._hawkes.on_event(sim_now=self._sim_now)
             self._qe.on_fill(qty * 100)
@@ -980,7 +986,9 @@ class PredatorBot:
         self._next_rl_tick = random.randint(cfg.ANTI_RL_INTERVAL_LO,
                                             cfg.ANTI_RL_INTERVAL_HI)
         self._eod_flatten_done = False
+        self._eod_flatten_last_t = 0.0
         self._inv_emerg_flatten_done = False
+        self._inv_emerg_flatten_last_t = 0.0
 
         # FIX-NEW3: Track minimum pnl seen this session for drawdown buffering
         self._pnl_min_seen = 0.0
@@ -1020,15 +1028,28 @@ class PredatorBot:
         utc_now = datetime.now(timezone.utc)
         m = utc_now.month
         d = utc_now.day
+        h = utc_now.hour
         if m in range(4, 11):
             offset_h = -4
         elif m == 3:
             first_sunday  = 1 + (6 - datetime(utc_now.year, 3, 1).weekday()) % 7
             second_sunday = first_sunday + 7
-            offset_h = -4 if d >= second_sunday else -5
+            # DST springs forward at 2:00 AM local (= 7:00 AM UTC)
+            if d > second_sunday:
+                offset_h = -4
+            elif d == second_sunday:
+                offset_h = -4 if h >= 7 else -5
+            else:
+                offset_h = -5
         elif m == 11:
             first_sunday = 1 + (6 - datetime(utc_now.year, 11, 1).weekday()) % 7
-            offset_h = -5 if d >= first_sunday else -4
+            # DST falls back at 2:00 AM local (= 6:00 AM UTC)
+            if d > first_sunday:
+                offset_h = -5
+            elif d == first_sunday:
+                offset_h = -5 if h >= 6 else -4
+            else:
+                offset_h = -4
         else:
             offset_h = -5
         eastern = utc_now + timedelta(hours=offset_h)
@@ -1068,8 +1089,8 @@ class PredatorBot:
                 self._pnl_cache = realized + unrealized
             # FIX-NEW3: Track minimum pnl to detect intra-refresh drawdown spikes
             self._pnl_min_seen = min(self._pnl_min_seen, self._pnl_cache)
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[PORTFOLIO] PnL refresh error: {e}", file=sys.stderr)
         try:
             shares = trader.get_portfolio_item(self._ticker).get_shares()
             self._q_cache = int(shares // self._cfg.SHARES_PER_LOT)
@@ -1077,8 +1098,8 @@ class PredatorBot:
                 self._inv_emerg_flatten_done = False
             if self._q_cache == 0:
                 self._eod_flatten_done = False
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[PORTFOLIO] inventory refresh error: {e}", file=sys.stderr)
         self._api_t = now
 
     def _ofi(self, bid_sz, ask_sz):
@@ -1177,8 +1198,9 @@ class PredatorBot:
         last  = self._mid_window[-1]
         if first <= 0:
             return False
-        net_drop = (first - last) / first
-        return net_drop > self._cfg.FLASH_CRASH_PCT
+        # Detect both flash crashes (drops) and flash rallies (spikes)
+        net_move = abs(first - last) / first
+        return net_move > self._cfg.FLASH_CRASH_PCT
 
     def _detect_competing_mm(self, spread, bid_sz, ask_sz):
         return (spread <= 0.02
@@ -1324,11 +1346,19 @@ class PredatorBot:
 
         if abs(q_lots) >= self._cfg.INV_EMERGENCY_LOTS:
             self._qeng.cancel_all(trader, self._ticker)
-            if not self._inv_emerg_flatten_done:
+            # Retry emergency flatten on a cooldown if inventory is still dangerous
+            if (not self._inv_emerg_flatten_done
+                    or (now_raw - self._inv_emerg_flatten_last_t
+                        >= self._cfg.EMERG_FLATTEN_RETRY_S)):
                 self._qeng.market_flatten(trader, self._ticker, q_lots)
-                self._inv_emerg_flatten_done = True
-                print(f"[EMERG] inventory q={q_lots:+d} — emergency flatten submitted once",
-                      flush=True)
+                self._inv_emerg_flatten_last_t = now_raw
+                if not self._inv_emerg_flatten_done:
+                    self._inv_emerg_flatten_done = True
+                    print(f"[EMERG] inventory q={q_lots:+d} — emergency flatten submitted",
+                          flush=True)
+                else:
+                    print(f"[EMERG] inventory q={q_lots:+d} — retrying flatten",
+                          flush=True)
             return
 
         # FIX-NEW3: Use drawdown buffer to account for pnl_cache lag.
@@ -1343,8 +1373,15 @@ class PredatorBot:
                     self._qeng.market_flatten(trader, self._ticker, q_lots)
                 self._halted = True
             return
-        else:
-            self._halted = False
+        elif self._halted:
+            # Hysteresis: only resume trading when PnL recovers sufficiently above halt level
+            resume_level = effective_drawdown_limit + self._cfg.DRAWDOWN_HYSTERESIS
+            if pnl >= resume_level:
+                print(f"[RESUME] PnL={pnl:,.0f} above resume level {resume_level:,.0f}",
+                      flush=True)
+                self._halted = False
+            else:
+                return  # stay halted until sufficient recovery
 
         if surge >= self._cfg.SURGE_HALT_THRESH:
             if not self._surge_halt:
@@ -1376,9 +1413,18 @@ class PredatorBot:
         eod_wind_down = tau <= self._cfg.EOD_WIND_DOWN_START_S
         if tau <= self._cfg.EOD_FLATTEN_START_S:
             self._qeng.cancel_all(trader, self._ticker)
-            if abs(q_lots) > 0 and not self._eod_flatten_done:
-                self._qeng.market_flatten(trader, self._ticker, q_lots)
-                self._eod_flatten_done = True
+            if abs(q_lots) > 0:
+                # Retry flatten on a cooldown if inventory is still non-zero
+                if (not self._eod_flatten_done
+                        or (now_raw - self._eod_flatten_last_t
+                            >= self._cfg.EOD_FLATTEN_RETRY_S)):
+                    self._qeng.market_flatten(trader, self._ticker, q_lots)
+                    self._eod_flatten_last_t = now_raw
+                    if not self._eod_flatten_done:
+                        self._eod_flatten_done = True
+                        print(f"[EOD] flatten q={q_lots:+d}", flush=True)
+                    else:
+                        print(f"[EOD] retry flatten q={q_lots:+d}", flush=True)
             return
 
         regime_qmax = self._regime.q_max()
@@ -1632,6 +1678,8 @@ class PredatorBot:
         finally:
             try:
                 self._qeng.cancel_all(trader, self._ticker)
+                # Refresh portfolio to get accurate final inventory
+                self._refresh_portfolio(trader)
                 q = self._q_cache
                 if abs(q) > 0:
                     print(f"[PREDATOR v19] EOD flatten q={q}", flush=True)
