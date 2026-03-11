@@ -5,28 +5,20 @@ import math
 import os
 import random
 import threading
-
-# ----- Simulation seed control -----
-SEED = int(os.environ.get("SIM_SEED", "0"))
-random.seed(SEED)
-
-print(f"[SIM] random seed = {SEED}")
-# -----------------------------------
-
 from collections import deque
-from datetime import datetime, time as dtime
+from datetime import datetime, time as dtime, timezone, timedelta
 
 try:
-    import shift                    # live SHIFT environment
+    import shift
     from shift import Order as _ShiftOrder
     _HAS_SHIFT = True
 except ImportError:
-    shift = None                    # simulation environment
+    shift = None
     _ShiftOrder = None
     _HAS_SHIFT = False
 
-MY_USERNAME = os.environ.get("SHIFT_USERNAME", "alpha-greeks")
-MY_PASSWORD = os.environ.get("SHIFT_PASSWORD", "Tku3YFOO")
+MY_USERNAME = os.environ.get("SHIFT_USERNAME", "")
+MY_PASSWORD = os.environ.get("SHIFT_PASSWORD", "")
 CFG_FILE    = os.environ.get("SHIFT_CFG",      "initiator.cfg")
 SESSION_LOG = "predator_session_log.json"
 
@@ -38,11 +30,11 @@ class Config:
     MARKET_CLOSE         = dtime(16, 0)
     SESSION_SECONDS      = 6.5 * 3600
 
-    GAMMA                = 0.10
-    K_BASE               = 8.0
-    INV_SKEW_COEFF       = 0.010
-    ALPHA_QI             = 0.025
-    LAMBDA_FLOW          = 0.02
+    GAMMA                = 0.07
+    K_BASE               = 38.0
+    INV_SKEW_COEFF       = 0.018
+    ALPHA_QI             = 0.020
+    LAMBDA_FLOW          = 0.030
     FLOW_EMA_ALPHA       = 0.20
     FLOW_NORM_CAP        = 1000.0
 
@@ -52,17 +44,17 @@ class Config:
     VOL_WARMUP_TICKS     = 50
 
     SPREAD_MIN           = 0.02
-    SPREAD_MAX           = 0.20
+    SPREAD_MAX           = 0.12
 
-    Q_MAX_LOTS           = 5
-    LOT_BASE             = 1
+    Q_MAX_LOTS           = 3
+    LOT_BASE             = 2
     LOT_MIN              = 1
 
     LIMIT_REBATE         = 0.002
     MARKET_FEE           = 0.003
 
-    DRAWDOWN_LIMIT       = -15_000.0
-    CAPITAL_RISK_FRACTION = 0.10   # FIX v12: max notional = capital * 10% / price
+    DRAWDOWN_LIMIT       = -10_000.0
+    CAPITAL_RISK_FRACTION = 0.08
     SURGE_CANCEL_THRESH  = 4.0
     SURGE_HALT_THRESH    = 7.0
     SURGE_RESUME_RATIO   = 2.5
@@ -71,8 +63,8 @@ class Config:
     FLASH_CRASH_PCT      = 0.035
     FLASH_CRASH_PAUSE_S  = 8.0
 
-    EOD_FLATTEN_START_S  = 900
-    EOD_AGGRESS_START_S  = 300
+    EOD_FLATTEN_START_S  = 600
+    EOD_AGGRESS_START_S  = 600
 
     QUOTE_INTERVAL_S     = 0.25
     QUOTE_MAX_AGE_LO     = 1.5
@@ -84,27 +76,27 @@ class Config:
     HAWKES_ALPHA         = 5.0
     HAWKES_BETA          = 5.0
 
-    TARGET_FILLS         = 400
-    FILL_PACE_K          = 0.15
-    FILL_PACE_MIN_MULT   = 0.75
-    FILL_PACE_MAX_MULT   = 1.35
+    TARGET_FILLS         = 700
+    FILL_PACE_K          = 0.20
+    FILL_PACE_MIN_MULT   = 0.90
+    FILL_PACE_MAX_MULT   = 1.50
 
     RS_WINDOW_S          = 5.0
-    RS_TOXIC_THRESH      = -0.001  # FIX v12: was -0.002, trigger toxic earlier
-    RS_WIDEN_MULT        = 1.60   # FIX v12: was 1.25, now actually applied in tick()
+    RS_TOXIC_THRESH      = -0.001
+    RS_WIDEN_MULT        = 1.15
     RS_MAX_HISTORY       = 50
-    TOXIC_DURATION_S     = 15.0   # FIX v12: was 5.0 — toxic flows persist longer
-    TOXIC_SPREAD_MULT    = 1.80   # FIX v12: was 1.50 — wider when toxic
-    TOXIC_LOT_PENALTY    = 0.50   # FIX v12: was 0.60 — smaller lots when toxic
+    TOXIC_DURATION_S     = 15.0
+    TOXIC_SPREAD_MULT    = 1.30
+    TOXIC_LOT_PENALTY    = 0.50
 
     MM_DETECT_SIZE       = 1000
 
     SCALPER_SIGMA_THRESH = 0.012
     SCALPER_QI_THRESH    = 0.25
     VOL_BURST_LO_SIGMA   = 0.015
-    VOL_BURST_LO_WIDEN   = 1.30
+    VOL_BURST_LO_WIDEN   = 1.10
     VOL_BURST_HI_SIGMA   = 0.020
-    VOL_BURST_HI_WIDEN   = 1.50
+    VOL_BURST_HI_WIDEN   = 1.20
 
     MOMENTUM_WINDOW      = 6
     MOMENTUM_BETA        = 0.40
@@ -126,38 +118,38 @@ class Config:
     LOT_SCALE_HI         = 0.7
     LOT_SCALE_LO         = 1.3
 
-    LAYER_MAX_INV        = 3
-    LAYER_MAX_SIGMA      = 0.015
+    LAYER_MAX_INV        = 1
+    LAYER_MAX_SIGMA      = 0.010
     LAYER_LOTS           = 1
 
     TC_TARGET_PNL          = 600.0
     TC_ATTACK_BELOW        = -200.0
     TC_DEFENSE_ABOVE       = 400.0
-    TC_ATTACK_SPREAD_MULT  = 0.85
-    TC_ATTACK_LOT_MULT     = 1.5
-    TC_DEFENSE_SPREAD_MULT = 1.25
-    TC_DEFENSE_LOT_MULT    = 0.7
+    TC_ATTACK_SPREAD_MULT  = 0.90
+    TC_ATTACK_LOT_MULT     = 1.3
+    TC_DEFENSE_SPREAD_MULT = 1.15
+    TC_DEFENSE_LOT_MULT    = 0.8
     TC_SPRINT_TAU_S        = 600.0
     TC_SPRINT_PNL_THRESH   = 200.0
-    TC_SPRINT_SPREAD_MULT  = 0.75
-    TC_SPRINT_LOT_MULT     = 1.8
+    TC_SPRINT_SPREAD_MULT  = 0.92
+    TC_SPRINT_LOT_MULT     = 1.20
 
     ANTI_RL_INTERVAL_LO  = 350
     ANTI_RL_INTERVAL_HI  = 600
 
-    AUTOCALIB_INTERVAL   = 300
-    AUTOCALIB_K_MIN      = 3.0
-    INTRA_K_INTERVAL     = 50
-    INTRA_K_UP           = 1.020
-    INTRA_K_DOWN         = 0.980
+    AUTOCALIB_INTERVAL   = 500
+    AUTOCALIB_K_MIN      = 28.0
+    AUTOCALIB_K_MAX      = 60.0
+    INTRA_K_INTERVAL     = 250
+    INTRA_K_UP           = 1.004
+    INTRA_K_DOWN         = 0.996
     INTRA_K_FILL_RATIO   = 0.80
-    AUTOCALIB_K_MAX      = 20.0
-    AUTOCALIB_G_MIN      = 0.07
+    AUTOCALIB_G_MIN      = 0.05
     AUTOCALIB_G_MAX      = 0.16
 
-    XROUND_K_MIN         = 3.0
-    XROUND_K_MAX         = 20.0
-    XROUND_G_MIN         = 0.07
+    XROUND_K_MIN         = 28.0
+    XROUND_K_MAX         = 60.0
+    XROUND_G_MIN         = 0.05
     XROUND_G_MAX         = 0.20
     XROUND_AQI_MIN       = 0.015
     XROUND_AQI_MAX       = 0.050
@@ -165,26 +157,31 @@ class Config:
     MIN_FILLS_SESSION    = 200
     LOG_EVERY            = 500
 
+    SIM_TICKS_PER_SESSION = 15_000
+
     REGIME_VOL_THRESH    = 0.012
     REGIME_TOXIC_THRESH  = 0.020
     REGIME_TOXIC_SURGE   = 5.0
     REGIME_SMOOTH_ALPHA  = 0.15
 
-    REGIME_CALM_GAMMA    = 0.08
-    REGIME_CALM_SMULT    = 1.05   # FIX v12: was 0.85 — compressed spreads caused adverse-sel in CALM
-    REGIME_CALM_QMAX     = 6
+    REGIME_CALM_GAMMA    = 0.07
+    REGIME_CALM_SMULT    = 1.00
+    REGIME_CALM_QMAX     = 3
 
-    REGIME_VOL_GAMMA     = 0.12
-    REGIME_VOL_SMULT     = 1.20
-    REGIME_VOL_QMAX      = 4
+    REGIME_VOL_GAMMA     = 0.10
+    REGIME_VOL_SMULT     = 1.10
+    REGIME_VOL_QMAX      = 2
 
-    REGIME_TOXIC_GAMMA   = 0.18
-    REGIME_TOXIC_SMULT   = 1.80
-    REGIME_TOXIC_QMAX    = 2
+    REGIME_TOXIC_GAMMA   = 0.15
+    REGIME_TOXIC_SMULT   = 1.35
+    REGIME_TOXIC_QMAX    = 1
 
-    SPREAD_EXP_OPTIONS   = [0.9, 1.0, 1.1]
+    SPREAD_EXP_OPTIONS   = [0.95, 1.0, 1.05]
     SPREAD_EXP_EPSILON   = 0.10
-    SPREAD_EXP_SWITCH_S  = 10.0
+    # FIX-BUG3: SPREAD_EXP_SWITCH_S increased from 10→120s so each arm accumulates
+    # ~30 quote-cycles of PnL signal before switching. At 10s the bandit switched
+    # every ~6 ticks — insufficient to distinguish arm quality from noise.
+    SPREAD_EXP_SWITCH_S  = 120.0   # was 10.0
 
     SIG_PERF_ALPHA       = 0.02
     SIG_WEIGHT_MIN       = 0.5
@@ -199,9 +196,11 @@ class Config:
 
     SHARPE_SNAPSHOT_S    = 60.0
     SHARPE_MIN_SNAPS     = 10
+    SHARPE_SNAP_TICKS    = 400
+    SHARPE_USE_TICKS     = True
 
     EDGE_LOT_SCALE       = 0.80
-    EDGE_QMAX_SCALE      = 0.50
+    EDGE_QMAX_SCALE      = 0.00
     EDGE_QMAX_CAP        = 10
 
     DECOY_PROB           = 0.085
@@ -211,17 +210,12 @@ class Config:
     QCOLLAPSE_HOLD_S     = 0.35
     VACUUM_RATIO         = 0.25
 
-    EARLY_COMPRESS_S     = 900.0
-    EARLY_COMPRESS_MULT  = 0.82
+    EARLY_WIDEN_S        = 120.0
+    EARLY_WIDEN_MULT     = 1.00
 
-    CASCADE_QI_THRESH    = 0.55
-    CASCADE_MICRO_THRESH = 0.005
-    CASCADE_FLOW_THRESH  = 0.30
-    CASCADE_INV_MULT     = 1.8
-    CASCADE_INV_TARGET   = 2
-    QUEUE_DROP_STEP      = 200
-    INV_TAPER_START_S    = 3600.0
-    INV_TAPER_MIN        = 0.20
+    WIDEN_MAX_MULT       = 2.00
+    WIDEN_MIN_MULT       = 0.75
+    INV_EMERGENCY_LOTS   = 4
 
 
 def load_session_log(cfg):
@@ -234,17 +228,23 @@ def load_session_log(cfg):
         fills        = int(  s.get("fills",     cfg.TARGET_FILLS))
         rs           = float(s.get("mean_rs",   0.005))
         pnl          = float(s.get("pnl",       0.0))
-        if fills < cfg.TARGET_FILLS and rs >= 0:
-            cfg.K_BASE = min(cfg.XROUND_K_MAX, cfg.K_BASE * 1.05)
-        if rs < 0:
-            # FIX v12: was * 0.92 (wrong! tightened spreads into adverse selection)
-            # Negative RS means we're getting picked off → widen spreads → increase k
-            cfg.K_BASE = min(cfg.XROUND_K_MAX, cfg.K_BASE * 1.10)
-        if pnl < 0:
-            cfg.K_BASE = max(cfg.XROUND_K_MIN, cfg.K_BASE * 0.96)
-            cfg.GAMMA  = min(cfg.XROUND_G_MAX,  cfg.GAMMA  * 1.08)
-        if 0 < rs < 0.004:
-            cfg.ALPHA_QI = min(cfg.XROUND_AQI_MAX, cfg.ALPHA_QI * 1.05)
+        # FIX-BUG9: Only apply cross-round adaptation if prior session was valid
+        # (fills >= MIN_FILLS_SESSION). A crashed session with low fills and
+        # negative pnl/rs would otherwise collapse K_BASE to the minimum floor,
+        # permanently widening spreads in the next round.
+        if fills >= cfg.MIN_FILLS_SESSION:
+            if fills < cfg.TARGET_FILLS and rs >= 0:
+                cfg.K_BASE = min(cfg.XROUND_K_MAX, cfg.K_BASE * 1.03)
+            if rs < 0:
+                cfg.K_BASE = max(cfg.XROUND_K_MIN, cfg.K_BASE * 0.95)
+            if pnl < 0:
+                cfg.K_BASE = max(cfg.XROUND_K_MIN, cfg.K_BASE * 0.97)
+                cfg.GAMMA  = min(cfg.XROUND_G_MAX,  cfg.GAMMA  * 1.05)
+            if 0 < rs < 0.004:
+                cfg.ALPHA_QI = min(cfg.XROUND_AQI_MAX, cfg.ALPHA_QI * 1.05)
+        else:
+            print(f"[XROUND] prior session had only {fills} fills — skipping param adaptation",
+                  flush=True)
         cfg.K_BASE   = max(cfg.XROUND_K_MIN,  min(cfg.XROUND_K_MAX,  cfg.K_BASE))
         cfg.GAMMA    = max(cfg.XROUND_G_MIN,   min(cfg.XROUND_G_MAX,  cfg.GAMMA))
         cfg.ALPHA_QI = max(cfg.XROUND_AQI_MIN, min(cfg.XROUND_AQI_MAX, cfg.ALPHA_QI))
@@ -257,6 +257,12 @@ def load_session_log(cfg):
 
 
 def save_session_log(cfg, fills, pnl, mean_rs, sharpe, best_exp):
+    # FIX-BUG9: Only save if session was meaningful (avoids poisoning next round
+    # with crashed-session data that shows negative pnl/rs with low fills).
+    if fills < cfg.MIN_FILLS_SESSION:
+        print(f"[XROUND] NOT saving — only {fills} fills (min={cfg.MIN_FILLS_SESSION})",
+              flush=True)
+        return
     try:
         with open(SESSION_LOG, "w") as f:
             json.dump({
@@ -323,7 +329,7 @@ class TrendBrake:
     def __init__(self, cfg):
         self._cfg      = cfg
         self._mids     = deque(maxlen=cfg.TREND_WINDOW)
-        self._last_tbf = 1.0   # initialised here — telem reads these before warmup
+        self._last_tbf = 1.0
         self._last_taf = 1.0
 
     def update(self, mid):
@@ -399,12 +405,20 @@ class QueueEstimator:
         return fill_prob < 0.50
 
     def lot_scale(self):
+        # FIX-BUG13: Linear interpolation between breakpoints to avoid 30% lot-size
+        # step-jumps when trade_rate oscillates near the 400 threshold boundary.
         r = self._trade_rate
-        if r > self._cfg.TRADE_RATE_HI:
-            return self._cfg.LOT_SCALE_HI
-        if r < self._cfg.TRADE_RATE_LO:
-            return self._cfg.LOT_SCALE_LO
-        return 1.0
+        hi = self._cfg.TRADE_RATE_HI
+        lo = self._cfg.TRADE_RATE_LO
+        hi_sc = self._cfg.LOT_SCALE_HI
+        lo_sc = self._cfg.LOT_SCALE_LO
+        if r >= hi:
+            return hi_sc
+        if r <= lo:
+            return lo_sc
+        # Linear interpolation between lo_sc and hi_sc across [lo, hi]
+        frac = (r - lo) / (hi - lo)
+        return lo_sc + frac * (hi_sc - lo_sc)
 
 
 class RegimeDetector:
@@ -458,11 +472,17 @@ class SpreadExplorer:
     def __init__(self, cfg):
         self._options     = list(cfg.SPREAD_EXP_OPTIONS)
         self._epsilon     = cfg.SPREAD_EXP_EPSILON
-        self._switch_s    = cfg.SPREAD_EXP_SWITCH_S
+        # FIX-BUG3: Use tick-count directly, not scaled seconds. SPREAD_EXP_SWITCH_S
+        # is now 120s, and each session has 15000/23400 ticks/s → 77 ticks/switch.
+        # This gives each arm ~20 quote-cycles of PnL to discriminate performance.
+        self._switch_ticks = max(50, int(cfg.SPREAD_EXP_SWITCH_S
+                                         * cfg.SIM_TICKS_PER_SESSION
+                                         / max(cfg.SESSION_SECONDS, 1)))
         self._scores      = {o: 0.0 for o in self._options}
         self._counts      = {o: 1   for o in self._options}
         self.current      = 1.0
-        self._last_switch = time.time()
+        self._last_switch_tick = 0
+        self._tick        = 0
 
     def seed(self, best_exp):
         if best_exp in self._options:
@@ -471,14 +491,15 @@ class SpreadExplorer:
                 self._scores[o] = 1.0 if o == best_exp else 0.0
 
     def choose(self):
-        if time.time() - self._last_switch < self._switch_s:
+        self._tick += 1
+        if self._tick - self._last_switch_tick < max(self._switch_ticks, 1):
             return self.current
         if random.random() < self._epsilon:
             self.current = random.choice(self._options)
         else:
             self.current = max(self._options,
                                key=lambda o: self._scores[o] / self._counts[o])
-        self._last_switch = time.time()
+        self._last_switch_tick = self._tick
         return self.current
 
     def update(self, pnl_delta):
@@ -501,9 +522,9 @@ class SignalPerformance:
 
     def update(self, qi, flow_norm, momentum, rs):
         a = self._alpha
-        self.qi_score  += a * rs * qi
-        self.fl_score  += a * rs * flow_norm
-        self.mom_score += a * rs * momentum
+        self.qi_score  = (1.0 - a) * self.qi_score  + a * rs * qi
+        self.fl_score  = (1.0 - a) * self.fl_score  + a * rs * flow_norm
+        self.mom_score = (1.0 - a) * self.mom_score + a * rs * momentum
 
     def weights(self):
         total = (abs(self.qi_score) + abs(self.fl_score)
@@ -511,26 +532,42 @@ class SignalPerformance:
         w_qi  = self.qi_score  / total
         w_fl  = self.fl_score  / total
         w_mom = self.mom_score / total
-        clamp = lambda w: max(self._w_min, min(self._w_max, 1.0 + w))
+        def clamp(w):
+            if w < 0:
+                return max(0.0, 1.0 + w)
+            return max(self._w_min, min(self._w_max, 1.0 + w))
         return clamp(w_qi), clamp(w_fl), clamp(w_mom)
 
 
 class SharpeTracker:
     def __init__(self, cfg):
-        self._snap_s   = cfg.SHARPE_SNAPSHOT_S
-        self._min_s    = cfg.SHARPE_MIN_SNAPS
-        self._snaps    = deque(maxlen=500)
-        self._last_pnl = 0.0
-        self._last_t   = time.time()
-        self.sharpe    = 0.0
+        self._snap_s      = cfg.SHARPE_SNAPSHOT_S
+        self._snap_ticks  = cfg.SHARPE_SNAP_TICKS
+        self._use_ticks   = cfg.SHARPE_USE_TICKS
+        self._min_s       = cfg.SHARPE_MIN_SNAPS
+        self._cfg         = cfg
+        self._snaps       = deque(maxlen=500)
+        self._last_pnl    = 0.0
+        self._last_t      = time.time()
+        self._tick_count  = 0
+        self._last_tick   = 0
+        self.sharpe       = 0.0
 
     def update(self, pnl):
-        now = time.time()
-        if now - self._last_t >= self._snap_s:
-            self._snaps.append(pnl - self._last_pnl)
-            self._last_pnl = pnl
-            self._last_t   = now
-            self._recalc()
+        self._tick_count += 1
+        if self._use_ticks:
+            if self._tick_count - self._last_tick >= self._snap_ticks:
+                self._snaps.append(pnl - self._last_pnl)
+                self._last_pnl  = pnl
+                self._last_tick = self._tick_count
+                self._recalc()
+        else:
+            now = time.time()
+            if now - self._last_t >= self._snap_s:
+                self._snaps.append(pnl - self._last_pnl)
+                self._last_pnl = pnl
+                self._last_t   = now
+                self._recalc()
 
     def _recalc(self):
         n = len(self._snaps)
@@ -540,7 +577,14 @@ class SharpeTracker:
         mean = sum(vals) / n
         var  = sum((x - mean) ** 2 for x in vals) / n
         std  = math.sqrt(max(var, 1e-12))
-        self.sharpe = (mean / std) * math.sqrt(n)
+        if self._use_ticks:
+            snaps_per_session = (self._cfg.SIM_TICKS_PER_SESSION
+                                 / max(self._snap_ticks, 1))
+        else:
+            snaps_per_session = (self._cfg.SESSION_SECONDS
+                                 / max(self._snap_s, 1))
+        periods_per_year = 252.0 * snaps_per_session
+        self.sharpe = (mean / std) * math.sqrt(periods_per_year)
 
 
 class ASSolver:
@@ -552,8 +596,7 @@ class ASSolver:
     def compute(self, microprice, sigma, q_lots, tau,
                 qi_lean=0.0, flow_lean=0.0, momentum_adj=0.0, qi_accel=0.0,
                 widen_mult=1.0, pace_mult=1.0,
-                regime_gamma=None, w_qi=1.0, w_flow=1.0, w_mom=1.0,
-                inv_target=0):
+                regime_gamma=None, w_qi=1.0, w_flow=1.0, w_mom=1.0):
         cfg      = self._cfg
         gamma    = regime_gamma if regime_gamma is not None else cfg.GAMMA
         k        = cfg.K_BASE
@@ -561,7 +604,7 @@ class ASSolver:
         sqrt_tau = math.sqrt(tau_norm)
 
         r = (microprice
-             - (q_lots - inv_target) * cfg.INV_SKEW_COEFF
+             - q_lots * cfg.INV_SKEW_COEFF
              + cfg.ALPHA_QI    * w_qi   * qi_lean
              + cfg.LAMBDA_FLOW * w_flow * flow_lean
              + w_mom * momentum_adj
@@ -587,18 +630,22 @@ class HawkesSurge:
         self._alpha  = cfg.HAWKES_ALPHA
         self._beta   = cfg.HAWKES_BETA
         self._lam    = cfg.HAWKES_MU
-        self._last_t = time.time()
+        self._last_t = None
 
-    def on_event(self):
-        now          = time.time()
+    def on_event(self, sim_now=None):
+        now          = sim_now if sim_now is not None else time.time()
+        if self._last_t is None:
+            self._last_t = now
         dt           = max(now - self._last_t, 1e-9)
         self._lam    = (self._mu
                         + (self._lam - self._mu) * math.exp(-self._beta * dt)
                         + self._alpha)
         self._last_t = now
 
-    def tick(self):
-        now          = time.time()
+    def tick(self, sim_now=None):
+        now          = sim_now if sim_now is not None else time.time()
+        if self._last_t is None:
+            self._last_t = now
         dt           = max(now - self._last_t, 1e-9)
         self._lam    = self._mu + (self._lam - self._mu) * math.exp(-self._beta * dt)
         self._last_t = now
@@ -610,15 +657,23 @@ class FillPaceController:
         self._cfg  = cfg
         self.start = time.time()
 
-    def multiplier(self, fill_count):
-        elapsed  = max(time.time() - self.start, 1.0)
+    def _elapsed(self, tau=None):
+        # FIX-BUG2: Always prefer tau-derived elapsed to avoid wall-clock vs
+        # sim-time mismatch. In simulation, wall-clock << SESSION_SECONDS → 
+        # expected_fills underestimated → spurious spread widen signal.
+        if tau is not None:
+            return max(self._cfg.SESSION_SECONDS - tau, 1.0)
+        return max(time.time() - self.start, 1.0)
+
+    def multiplier(self, fill_count, tau=None):
+        elapsed  = self._elapsed(tau)
         expected = self._cfg.TARGET_FILLS * (elapsed / self._cfg.SESSION_SECONDS)
         error    = expected - fill_count
         mult     = 1.0 - self._cfg.FILL_PACE_K * (error / max(self._cfg.TARGET_FILLS, 1))
         return max(self._cfg.FILL_PACE_MIN_MULT, min(self._cfg.FILL_PACE_MAX_MULT, mult))
 
-    def projected_fills(self, fill_count):
-        elapsed = max(time.time() - self.start, 1.0)
+    def projected_fills(self, fill_count, tau=None):
+        elapsed = self._elapsed(tau)
         return fill_count / elapsed * self._cfg.SESSION_SECONDS
 
 
@@ -629,17 +684,22 @@ class RealizedSpreadMonitor:
         self._history = deque(maxlen=cfg.RS_MAX_HISTORY)
         self._lock    = threading.Lock()
 
-    def record(self, side, price):
+    def record(self, side, price, mid_at_fill, sim_now=None):
+        now = sim_now if sim_now is not None else time.time()
         with self._lock:
-            self._pending.append((side, price, time.time()))
+            self._pending.append((side, price, mid_at_fill, now))
 
-    def update(self, current_mid):
-        now = time.time()
+    def update(self, current_mid, sim_now=None):
+        now = sim_now if sim_now is not None else time.time()
         with self._lock:
             while (self._pending
-                   and (now - self._pending[0][2]) > self._cfg.RS_WINDOW_S):
-                side, price, _ = self._pending.popleft()
-                rs = (current_mid - price) if side == 'BID' else (price - current_mid)
+                   and (now - self._pending[0][3]) > self._cfg.RS_WINDOW_S):
+                side, price, mid_at_fill, _ = self._pending.popleft()
+                # FIX-BUG7: Use mid_at_fill (mid price at moment of fill) for RS
+                # computation rather than current_mid (5s later). In trending markets
+                # the 5s drift inflates RS positively in uptrends and falsely triggers
+                # TOXIC regime in downtrends. mid_at_fill was being stored but ignored.
+                rs = (mid_at_fill - price) if side == 'BID' else (price - mid_at_fill)
                 self._history.append(rs)
 
     def mean_rs(self):
@@ -655,19 +715,24 @@ class TournamentController:
     def __init__(self, cfg):
         self._cfg   = cfg
         self.mode   = "NORMAL"
-        self._start = time.time()
 
     def update(self, pnl, tau):
         cfg     = self._cfg
-        elapsed = time.time() - self._start
+        elapsed = max(cfg.SESSION_SECONDS - tau, 0.0)
         exp     = cfg.TC_TARGET_PNL * (elapsed / max(cfg.SESSION_SECONDS, 1.0))
         delta   = pnl - exp
-        if tau < cfg.TC_SPRINT_TAU_S and pnl < cfg.TC_SPRINT_PNL_THRESH:
-            self.mode = "SPRINT"
-        elif delta < cfg.TC_ATTACK_BELOW:
+        # FIX-BUG5: ATTACK and DEFENSE are checked BEFORE SPRINT so that when
+        # pnl < TC_ATTACK_BELOW AND tau < TC_SPRINT_TAU_S, the bot correctly enters
+        # maximum ATTACK mode rather than the less aggressive SPRINT mode.
+        # Original order had SPRINT first → SPRINT always won over ATTACK in the
+        # critical last 10 minutes when the bot was most behind. 
+        # SPRINT now only fires when pnl is between ATTACK_BELOW and SPRINT_PNL_THRESH.
+        if delta < cfg.TC_ATTACK_BELOW:
             self.mode = "ATTACK"
         elif delta > cfg.TC_DEFENSE_ABOVE:
             self.mode = "DEFENSE"
+        elif tau < cfg.TC_SPRINT_TAU_S and pnl < cfg.TC_SPRINT_PNL_THRESH:
+            self.mode = "SPRINT"
         else:
             self.mode = "NORMAL"
 
@@ -697,14 +762,18 @@ class AutoCalibrator:
             return
         cfg = self._cfg
         if rs < 0:
-            # FIX v12: was * 0.95 (wrong! adverse selection needs wider spreads → higher k)
-            cfg.K_BASE = min(cfg.AUTOCALIB_K_MAX, cfg.K_BASE * 1.06)
+            cfg.K_BASE = max(cfg.AUTOCALIB_K_MIN, cfg.K_BASE * 0.97)
+        elif rs > 0.003 and fill_proj >= cfg.TARGET_FILLS:
+            cfg.K_BASE = min(cfg.AUTOCALIB_K_MAX, cfg.K_BASE * 1.02)
         elif fill_proj < cfg.TARGET_FILLS:
-            cfg.K_BASE = min(cfg.AUTOCALIB_K_MAX, cfg.K_BASE * 1.04)
-        if inv_var > 6.0:
-            cfg.GAMMA = min(cfg.AUTOCALIB_G_MAX, cfg.GAMMA * 1.04)
+            cfg.K_BASE = min(cfg.AUTOCALIB_K_MAX, cfg.K_BASE * 1.01)
+        elif fill_proj > cfg.TARGET_FILLS * 1.3 and rs > 0:
+            cfg.K_BASE = max(cfg.AUTOCALIB_K_MIN, cfg.K_BASE * 0.99)
+        cfg.K_BASE = max(cfg.AUTOCALIB_K_MIN, min(cfg.AUTOCALIB_K_MAX, cfg.K_BASE))
+        if inv_var > 4.0:
+            cfg.GAMMA = min(cfg.AUTOCALIB_G_MAX, cfg.GAMMA * 1.03)
         else:
-            cfg.GAMMA = max(cfg.AUTOCALIB_G_MIN, cfg.GAMMA * 0.99)
+            cfg.GAMMA = max(cfg.AUTOCALIB_G_MIN, cfg.GAMMA * 0.995)
 
 
 class IntraSessionKAdapter:
@@ -718,17 +787,19 @@ class IntraSessionKAdapter:
             return
         cfg = self._cfg
         if rs_mean < 0:
-            # FIX v12: was INTRA_K_DOWN (0.980) — totally backwards!
-            # Adverse selection → widen → raise k
+            cfg.K_BASE = max(cfg.AUTOCALIB_K_MIN, cfg.K_BASE * cfg.INTRA_K_DOWN)
+        elif rs_mean > 0.003 and fill_proj >= cfg.TARGET_FILLS:
             cfg.K_BASE = min(cfg.AUTOCALIB_K_MAX, cfg.K_BASE * cfg.INTRA_K_UP)
         if fill_proj < cfg.INTRA_K_FILL_RATIO * cfg.TARGET_FILLS:
             cfg.K_BASE = min(cfg.AUTOCALIB_K_MAX, cfg.K_BASE * cfg.INTRA_K_UP)
+        elif fill_proj > cfg.TARGET_FILLS * 1.3 and rs_mean > 0:
+            cfg.K_BASE = max(cfg.AUTOCALIB_K_MIN, cfg.K_BASE * cfg.INTRA_K_DOWN)
+        cfg.K_BASE = max(cfg.AUTOCALIB_K_MIN, min(cfg.AUTOCALIB_K_MAX, cfg.K_BASE))
 
 
 class QuoteEngine:
     @staticmethod
     def _order_type(side_or_str, is_market=False):
-        """Return the correct Order.Type regardless of environment."""
         buy = side_or_str == 'BID'
         if _HAS_SHIFT:
             if is_market:
@@ -779,7 +850,7 @@ class QuoteEngine:
     def market_flatten(trader, ticker, q_lots):
         if q_lots == 0:
             return
-        side = 'ASK' if q_lots > 0 else 'BID'    # selling to flatten long, buying to flatten short
+        side = 'ASK' if q_lots > 0 else 'BID'
         try:
             otype = QuoteEngine._order_type(side, is_market=True)
             trader.submit_order(QuoteEngine._make_order(otype, ticker, abs(q_lots)))
@@ -795,6 +866,8 @@ class FillCallback:
         self._ticker    = ticker
         self.fill_count = 0
         self._lock      = threading.Lock()
+        self._sim_now   = None
+        self._current_mid = None
 
     def __call__(self, trader, order_id):
         try:
@@ -805,17 +878,17 @@ class FillCallback:
                           getattr(order, 'executed_size', 0))
             if qty == 0:
                 return
-            self._hawkes.on_event()
+            self._hawkes.on_event(sim_now=self._sim_now)
             self._qe.on_fill(qty * 100)
-            # Duck-type side detection: works with shift.Order.Type and sim Order.Type
             try:
                 t = order.type
                 type_str = t.name if hasattr(t, 'name') else str(t)
                 is_buy = 'BUY' in type_str.upper()
                 side = 'BID' if is_buy else 'ASK'
             except Exception:
-                side = 'ASK'
-            self._rs.record(side, float(order.price))
+                side = 'BID'
+            mid_now = self._current_mid if self._current_mid is not None else float(order.price)
+            self._rs.record(side, float(order.price), mid_now, sim_now=self._sim_now)
             with self._lock:
                 self.fill_count += 1
         except Exception as e:
@@ -856,9 +929,6 @@ class PredatorBot:
 
         self._last_bid_sz = None
         self._last_ask_sz = None
-        self._bid_drop    = 0
-        self._ask_drop    = 0
-        self._cascade_active = False
 
         self._mid_window = deque(maxlen=cfg.FLASH_CRASH_WINDOW)
         self._inv_window = deque(maxlen=60)
@@ -883,31 +953,104 @@ class PredatorBot:
         self._rl_offset    = 0.0
         self._next_rl_tick = random.randint(cfg.ANTI_RL_INTERVAL_LO,
                                             cfg.ANTI_RL_INTERVAL_HI)
+        self._eod_flatten_done = False
+        self._inv_emerg_flatten_done = False
+
+    @property
+    def _last_bid_price(self):
+        return self._last_bid
+
+    @property
+    def _last_ask_price(self):
+        return self._last_ask
+
+    @property
+    def _flash_crash_until(self):
+        return self._flash_until
+
+    @property
+    def _churn_pause_until(self):
+        return self._queue_hold_until
+
+    @property
+    def fill_count(self):
+        return self._fill_cb.fill_count
+
+    @property
+    def tick_count(self):
+        return self._tick_n
+
+    def _sim_now(self):
+        if _HAS_SHIFT:
+            return time.time()
+        tick_s = self._cfg.SESSION_SECONDS / max(self._cfg.SIM_TICKS_PER_SESSION, 1)
+        return self._pace.start + self._tick_n * tick_s
+
+    @staticmethod
+    def _eastern_now():
+        utc_now = datetime.now(timezone.utc)
+        m = utc_now.month
+        d = utc_now.day
+        if m in range(4, 11):
+            offset_h = -4
+        elif m == 3:
+            first_sunday  = 1 + (6 - datetime(utc_now.year, 3, 1).weekday()) % 7
+            second_sunday = first_sunday + 7
+            offset_h = -4 if d >= second_sunday else -5
+        elif m == 11:
+            first_sunday = 1 + (6 - datetime(utc_now.year, 11, 1).weekday()) % 7
+            offset_h = -5 if d >= first_sunday else -4
+        else:
+            offset_h = -5
+        eastern = utc_now + timedelta(hours=offset_h)
+        return eastern
 
     def _tau(self):
-        t     = datetime.now().time()
-        now_s = t.hour * 3600 + t.minute * 60 + t.second
-        cls_s = (self._cfg.MARKET_CLOSE.hour * 3600
-                 + self._cfg.MARKET_CLOSE.minute * 60)
-        return float(max(cls_s - now_s, 0))
+        if _HAS_SHIFT:
+            t     = self._eastern_now().time()
+            now_s = t.hour * 3600 + t.minute * 60 + t.second
+            cls_s = (self._cfg.MARKET_CLOSE.hour * 3600
+                     + self._cfg.MARKET_CLOSE.minute * 60)
+            return float(max(cls_s - now_s, 0))
+        elapsed = self._tick_n * (self._cfg.SESSION_SECONDS
+                                  / max(self._cfg.SIM_TICKS_PER_SESSION, 1))
+        return float(max(self._cfg.SESSION_SECONDS - elapsed, 0))
 
     def _market_open(self):
-        t = datetime.now().time()
-        return self._cfg.MARKET_OPEN <= t <= self._cfg.MARKET_CLOSE
+        if _HAS_SHIFT:
+            t = self._eastern_now().time()
+            return self._cfg.MARKET_OPEN <= t < self._cfg.MARKET_CLOSE
+        return self._tick_n < self._cfg.SIM_TICKS_PER_SESSION
 
     def _refresh_portfolio(self, trader):
         now = time.time()
         if now - self._api_t < self._cfg.API_REFRESH_S:
             return
         try:
-            realized        = float(trader.get_portfolio_summary().get_total_realized_pl())
-            unrealized      = float(trader.get_portfolio_item(self._ticker).get_unrealized_pl())
-            self._pnl_cache = realized + unrealized
+            if hasattr(trader, '_mark_to_market'):
+                self._pnl_cache = trader._mark_to_market()
+            else:
+                realized = float(trader.get_portfolio_summary().get_total_realized_pl())
+                try:
+                    unrealized = float(
+                        trader.get_portfolio_item(self._ticker).get_unrealized_pl())
+                except (AttributeError, Exception):
+                    unrealized = 0.0
+                self._pnl_cache = realized + unrealized
         except Exception:
             pass
         try:
-            shares        = trader.get_portfolio_item(self._ticker).get_shares()
+            shares = trader.get_portfolio_item(self._ticker).get_shares()
             self._q_cache = int(shares // self._cfg.SHARES_PER_LOT)
+            # FIX-BUG1: Reset _inv_emerg_flatten_done ONLY when q_cache == 0 (fully flat).
+            # Previous code reset at abs(q_cache) < INV_EMERGENCY_LOTS (4), which includes
+            # q=3 (a valid non-emergency position). Scenario: q=3→4 triggers emergency,
+            # API refresh sees stale q=3 → flag resets → next tick fires another market order.
+            # Resetting at q==0 guarantees the position was fully cleared before re-arming.
+            if self._q_cache == 0:
+                self._inv_emerg_flatten_done = False
+            if self._q_cache == 0:
+                self._eod_flatten_done = False
         except Exception:
             pass
         self._api_t = now
@@ -983,20 +1126,43 @@ class PredatorBot:
         eff_mult = tc_lot_mult * toxic_penalty
         bid_l    = max(cfg.LOT_MIN, int(round(base_bid * liq_sc * eff_mult)))
         ask_l    = max(cfg.LOT_MIN, int(round(base_ask * liq_sc * eff_mult)))
-        inv_cap  = max(1, q_max - abs(q_lots))
-        bid_l    = min(bid_l, inv_cap)
-        ask_l    = min(ask_l, inv_cap)
+
+        add_bid_cap = max(0, q_max - q_lots)
+        add_ask_cap = max(0, q_max + q_lots)
+        # FIX-BUG6: In TOXIC regime, TOXIC_LOT_PENALTY=0.5 may round bid_l to 0
+        # before the LOT_MIN floor raises it back to 1. This defeats the penalty.
+        # Solution: apply LOT_MIN only when toxic_penalty == 1.0 (non-toxic).
+        # In toxic regime, allow bid_l/ask_l to remain 0 if penalty rounds them down.
+        if toxic_penalty < 1.0:
+            # Toxic: do NOT apply LOT_MIN floor — let penalty govern lot size
+            bid_l = int(round(base_bid * liq_sc * eff_mult))
+            ask_l = int(round(base_ask * liq_sc * eff_mult))
+        # else: keep the LOT_MIN floor already applied above
+
+        if add_bid_cap > 0:
+            bid_l = min(max(0 if toxic_penalty < 1.0 else cfg.LOT_MIN, bid_l), add_bid_cap)
+        else:
+            bid_l = 0
+        if add_ask_cap > 0:
+            ask_l = min(max(0 if toxic_penalty < 1.0 else cfg.LOT_MIN, ask_l), add_ask_cap)
+        else:
+            ask_l = 0
         return bid_l, ask_l
 
     def _is_flash_crash(self, mid):
         self._mid_window.append(mid)
         if len(self._mid_window) < self._cfg.FLASH_CRASH_WINDOW:
             return False
-        lo = min(self._mid_window)
-        hi = max(self._mid_window)
-        if lo <= 0:
+        # FIX-BUG12: Trigger flash crash detection only on NET DOWNWARD moves,
+        # not on any large range (which falsely fires during uptrends).
+        # Condition: the window's latest mid must be significantly BELOW the earliest,
+        # i.e., a directional crash, not just a large price range from a rally.
+        first = self._mid_window[0]
+        last  = self._mid_window[-1]
+        if first <= 0:
             return False
-        return (hi - lo) / lo > self._cfg.FLASH_CRASH_PCT
+        net_drop = (first - last) / first   # positive = price fell
+        return net_drop > self._cfg.FLASH_CRASH_PCT
 
     def _detect_competing_mm(self, spread, bid_sz, ask_sz):
         return (spread <= 0.02
@@ -1005,39 +1171,23 @@ class PredatorBot:
 
     def _apply_liquidity_dominance(self, bid_p, ask_p, bid_sz, ask_sz,
                                    my_bid, my_ask, spread):
-        if spread > 0.02:
-            dom_bid = round(bid_p + 0.01, 2)
-            dom_ask = round(ask_p - 0.01, 2)
-            if dom_ask > dom_bid:
-                my_bid = max(my_bid, dom_bid)
-                my_ask = min(my_ask, dom_ask)
-
         if self._detect_competing_mm(spread, bid_sz, ask_sz):
             stepped_bid = round(bid_p + 0.01, 2)
             if stepped_bid < ask_p:
                 my_bid = max(my_bid, stepped_bid)
+            stepped_ask = round(ask_p - 0.01, 2)
+            if stepped_ask > my_bid:
+                my_ask = min(my_ask, stepped_ask)
 
-        # FIX v12: only step ahead of queue when NOT toxic — stepping ahead when adversely
-        # selected feeds the problem (informed traders are sitting in that queue)
-        toxic_now = time.time() < self._toxic_until
+        toxic_now = self._sim_now() < self._toxic_until
         if not toxic_now and self._qe.should_step_ahead(bid_sz, spread):
             stepped = round(bid_p + 0.01, 2)
-            if stepped < ask_p:
+            if stepped < ask_p and stepped >= my_bid - 3 * 0.01:
                 my_bid = max(my_bid, stepped)
 
         if not toxic_now and self._qe.should_step_ahead(ask_sz, spread):
             stepped = round(ask_p - 0.01, 2)
-            if stepped > my_bid:
-                my_ask = min(my_ask, stepped)
-
-        if not toxic_now and self._bid_drop > self._cfg.QUEUE_DROP_STEP:
-            stepped = round(bid_p + 0.01, 2)
-            if stepped < ask_p:
-                my_bid = max(my_bid, stepped)
-
-        if not toxic_now and self._ask_drop > self._cfg.QUEUE_DROP_STEP:
-            stepped = round(ask_p - 0.01, 2)
-            if stepped > my_bid:
+            if stepped > my_bid and stepped <= my_ask + 3 * 0.01:
                 my_ask = min(my_ask, stepped)
 
         if my_ask <= my_bid:
@@ -1050,7 +1200,7 @@ class PredatorBot:
                 and sigma_eff <= self._cfg.LAYER_MAX_SIGMA
                 and not self._rs.is_toxic()
                 and not self._scalper_mode
-                and time.time() >= self._toxic_until)
+                and self._sim_now() >= self._toxic_until)
 
     def _scalper_sides(self, sigma, qi):
         if sigma <= self._cfg.SCALPER_SIGMA_THRESH:
@@ -1072,8 +1222,6 @@ class PredatorBot:
 
     def _check_queue_collapse(self, bid_sz, ask_sz, now):
         cancel_now = False
-        self._bid_drop = max(0, (self._last_bid_sz or bid_sz) - bid_sz)
-        self._ask_drop = max(0, (self._last_ask_sz or ask_sz) - ask_sz)
         if self._last_bid_sz is not None and self._last_ask_sz is not None:
             cfg = self._cfg
             if (bid_sz < self._last_bid_sz * cfg.VACUUM_RATIO
@@ -1091,7 +1239,8 @@ class PredatorBot:
             return
 
         self._tick_n += 1
-        now_raw = time.time()
+        now_raw = self._sim_now()
+        self._fill_cb._sim_now = now_raw
 
         try:
             bb     = trader.get_best_price(self._ticker)
@@ -1112,6 +1261,7 @@ class PredatorBot:
         mid    = (bid_p + ask_p) / 2.0
         spread = ask_p - bid_p
         tau    = self._tau()
+        self._fill_cb._current_mid = mid
 
         if self._is_flash_crash(mid):
             if now_raw > self._flash_until:
@@ -1131,18 +1281,10 @@ class PredatorBot:
         flow_norm    = self._normalize_flow(flow_raw)
         momentum_adj = self._momentum.update(microprice, mid)
         qi_accel     = self._qi_acceleration(qi)
-        micro_dev    = microprice - mid
-
-        self._cascade_active = (
-            abs(qi) > self._cfg.CASCADE_QI_THRESH
-            and abs(micro_dev) > self._cfg.CASCADE_MICRO_THRESH
-            and abs(flow_norm) > self._cfg.CASCADE_FLOW_THRESH
-            and not self._rs.is_toxic()
-        )
 
         self._qe.update()
-        self._rs.update(mid)
-        surge  = self._hawkes.tick()
+        self._rs.update(mid, sim_now=now_raw)
+        surge  = self._hawkes.tick(sim_now=now_raw)
         regime = self._regime.update(sigma, surge)
 
         self._refresh_portfolio(trader)
@@ -1156,26 +1298,31 @@ class PredatorBot:
         if rs_val < self._cfg.RS_TOXIC_THRESH:
             self._toxic_until = now_raw + self._cfg.TOXIC_DURATION_S
 
-        # ── TELEMETRY written later, after edge is computed ──
-
         pnl_delta      = pnl - self._last_pnl
         self._spread_exp.update(pnl_delta)
         self._last_pnl = pnl
 
         self._sig_perf.update(qi, flow_norm, momentum_adj, rs_val)
 
+        if abs(q_lots) >= self._cfg.INV_EMERGENCY_LOTS:
+            self._qeng.cancel_all(trader, self._ticker)
+            if not self._inv_emerg_flatten_done:
+                self._qeng.market_flatten(trader, self._ticker, q_lots)
+                self._inv_emerg_flatten_done = True
+                print(f"[EMERG] inventory q={q_lots:+d} — emergency flatten submitted once",
+                      flush=True)
+            return
+
         if pnl < self._cfg.DRAWDOWN_LIMIT:
             if not self._halted:
                 print(f"[HALT] PnL={pnl:,.0f} inv={q_lots:+d} — flattening", flush=True)
                 self._qeng.cancel_all(trader, self._ticker)
-                # FIX v12: was cancel-only → position bled indefinitely after halt.
-                # Market-flatten immediately to stop the loss from open inventory.
                 if q_lots != 0:
                     self._qeng.market_flatten(trader, self._ticker, q_lots)
                 self._halted = True
             return
-
-        self._halted = False
+        else:
+            self._halted = False
 
         if surge >= self._cfg.SURGE_HALT_THRESH:
             if not self._surge_halt:
@@ -1197,18 +1344,9 @@ class PredatorBot:
 
         if tau <= self._cfg.EOD_AGGRESS_START_S:
             self._qeng.cancel_all(trader, self._ticker)
-            if abs(q_lots) > 0:
+            if abs(q_lots) > 0 and not self._eod_flatten_done:
                 self._qeng.market_flatten(trader, self._ticker, q_lots)
-            return
-
-        if tau <= self._cfg.EOD_FLATTEN_START_S:
-            self._qeng.cancel_all(trader, self._ticker)
-            if abs(q_lots) > 0:
-                eod_bid, eod_ask = self._solver.compute(
-                    microprice, sigma, q_lots, tau, qi, flow_norm,
-                    momentum_adj=0.0, widen_mult=2.0)
-                self._qeng.submit_limit(trader, self._ticker, 'BID', eod_bid, 1)
-                self._qeng.submit_limit(trader, self._ticker, 'ASK', eod_ask, 1)
+                self._eod_flatten_done = True
             return
 
         regime_qmax = self._regime.q_max()
@@ -1217,24 +1355,11 @@ class PredatorBot:
                 self._cfg.INITIAL_CAPITAL * self._cfg.CAPITAL_RISK_FRACTION
                 / (mid * self._cfg.SHARES_PER_LOT))
             regime_qmax = min(regime_qmax, max(1, capital_risk_lots))
-        if tau < self._cfg.INV_TAPER_START_S:
-            taper = max(self._cfg.INV_TAPER_MIN, tau / self._cfg.INV_TAPER_START_S)
-            regime_qmax = max(1, int(regime_qmax * taper))
-        if self._cascade_active:
-            regime_qmax = min(self._cfg.Q_MAX_LOTS,
-                              int(regime_qmax * self._cfg.CASCADE_INV_MULT))
-        allow_bid   = q_lots <  regime_qmax
-        allow_ask   = q_lots > -regime_qmax
 
         scalper_bid, scalper_ask = self._scalper_sides(sigma, qi)
-        allow_bid = allow_bid and scalper_bid
-        allow_ask = allow_ask and scalper_ask
-
         trend_bid_f, trend_ask_f = self._trend_brake.update(mid)
-        allow_bid = allow_bid and (trend_bid_f > 0.0)
-        allow_ask = allow_ask and (trend_ask_f > 0.0)
 
-        now_w     = time.time()
+        now_w     = now_raw
         quote_age = now_w - self._last_quote_t
 
         if quote_age < self._cfg.QUOTE_INTERVAL_S:
@@ -1244,27 +1369,28 @@ class PredatorBot:
             return
 
         sigma_eff = sigma if self._vol.warmed_up else self._cfg.SIGMA_MAX
-
         toxic_active = now_w < self._toxic_until
-
         edge = self._edge_score(qi, flow_norm, momentum_adj, toxic_active)
 
         widen = self._regime.spread_mult()
         if surge >= 2.0:
-            widen = max(widen, 1.50)
+            widen = max(widen, 1.25)
         if sigma_eff > self._cfg.VOL_BURST_HI_SIGMA:
             widen = max(widen, self._cfg.VOL_BURST_HI_WIDEN)
         elif sigma_eff > self._cfg.VOL_BURST_LO_SIGMA:
             widen = max(widen, self._cfg.VOL_BURST_LO_WIDEN)
         if toxic_active:
             widen = max(widen, self._cfg.TOXIC_SPREAD_MULT)
-        # FIX v12: apply RS_WIDEN_MULT when realized spread is negative (was defined, never used)
         if rs_val < 0:
             widen = max(widen, self._cfg.RS_WIDEN_MULT)
 
+        inv_ratio  = abs(q_lots) / max(regime_qmax, 1)
+        inv_widen  = 1.0 + 0.25 * inv_ratio * inv_ratio
+        widen      = max(widen, inv_widen)
+
         elapsed = now_w - self._pace.start
-        if elapsed < self._cfg.EARLY_COMPRESS_S:
-            widen *= self._cfg.EARLY_COMPRESS_MULT
+        if elapsed < self._cfg.EARLY_WIDEN_S:
+            widen *= self._cfg.EARLY_WIDEN_MULT
 
         tc_sm      = self._tc.spread_mult()
         tc_lm      = self._tc.lot_mult()
@@ -1273,15 +1399,24 @@ class PredatorBot:
 
         toxic_penalty  = self._cfg.TOXIC_LOT_PENALTY if toxic_active else 1.0
         widen          = max(0.5, widen * tc_sm * self._spread_exp.choose())
+        widen          = max(self._cfg.WIDEN_MIN_MULT,
+                             min(self._cfg.WIDEN_MAX_MULT, widen))
         regime_qmax    = min(self._cfg.EDGE_QMAX_CAP,
                              int(regime_qmax * (1.0 + self._cfg.EDGE_QMAX_SCALE * edge * rg_es)))
 
-        # BUG-3 FIX: _lots() was defined but never called; bl_telem/al_telem were undefined
+        allow_bid   = q_lots <  regime_qmax
+        allow_ask   = q_lots > -regime_qmax
+        allow_bid   = allow_bid and scalper_bid and (trend_bid_f > 0.0)
+        allow_ask   = allow_ask and scalper_ask and (trend_ask_f > 0.0)
+        half_qmax = regime_qmax * 0.5
+        if q_lots > half_qmax and qi < -0.25:
+            allow_bid = False
+        if q_lots < -half_qmax and qi > 0.25:
+            allow_ask = False
+
         bl_telem, al_telem = self._lots(q_lots, tc_lm, regime_qmax, toxic_penalty)
 
-        # ── TELEMETRY ── placed here (post-edge, post-lot) so all fields are valid.
-        # Fires regardless of subsequent guard/return (unchanged, queue-hold etc.).
-        _tnow = time.time()
+        _tnow = now_raw
         if _tnow - self._last_telem_t >= self._cfg.TELEM_INTERVAL_S:
             self._logger.log({
                 "t":        round(_tnow - self._pace.start, 1),
@@ -1301,15 +1436,25 @@ class PredatorBot:
                 "tbf":      round(self._trend_brake._last_tbf, 2),
                 "taf":      round(self._trend_brake._last_taf, 2),
                 "lot":      bl_telem,
+                "widen":    round(widen, 3),
+                "tc_mode":  self._tc.mode,
+                "sharpe":   round(self._sharpe.sharpe, 3),
+                "half_spread_ticks": round(widen * math.log(1 + self._cfg.GAMMA / max(self._cfg.K_BASE, 1)) / self._cfg.GAMMA / 0.01, 2),
             })
             self._last_telem_t = _tnow
 
         fc        = self._fill_cb.fill_count
-        pace_mult = self._pace.multiplier(fc)
-        fill_proj = self._pace.projected_fills(fc)
+        # FIX-BUG2: Always pass tau= to both pace methods so elapsed is computed from
+        # simulation time (SESSION_SECONDS - tau) rather than wall-clock. Without this,
+        # a fast simulator causes fill pace to underestimate expected fills → spreads
+        # widen aggressively for a spurious fill-deficit that doesn't exist.
+        pace_mult = self._pace.multiplier(fc, tau=tau)
+        fill_proj = self._pace.projected_fills(fc, tau=tau)
         inv_var   = self._inv_var()
         self._calib.update(rs_val, fill_proj, inv_var)
-        self._k_adapter.update(fill_proj, rs_val)
+        autocalib_fired = (self._tick_n % self._cfg.AUTOCALIB_INTERVAL == 0)
+        if not autocalib_fired:
+            self._k_adapter.update(fill_proj, rs_val)
 
         w_qi, w_flow, w_mom = self._sig_perf.weights()
 
@@ -1318,12 +1463,6 @@ class PredatorBot:
             self._next_rl_tick = (self._tick_n
                                   + random.randint(self._cfg.ANTI_RL_INTERVAL_LO,
                                                    self._cfg.ANTI_RL_INTERVAL_HI))
-        else:
-            self._rl_offset = 0.0
-
-        inv_target = 0
-        if self._cascade_active:
-            inv_target = int(self._cfg.CASCADE_INV_TARGET * (1.0 if qi > 0 else -1.0))
 
         new_bid, new_ask = self._solver.compute(
             microprice, sigma_eff, q_lots, tau,
@@ -1331,8 +1470,7 @@ class PredatorBot:
             momentum_adj=momentum_adj, qi_accel=qi_accel,
             widen_mult=widen, pace_mult=pace_mult,
             regime_gamma=self._regime.gamma(),
-            w_qi=w_qi, w_flow=w_flow, w_mom=w_mom,
-            inv_target=inv_target)
+            w_qi=w_qi, w_flow=w_flow, w_mom=w_mom)
 
         new_bid, new_ask = self._apply_liquidity_skew(
             new_bid, new_ask, qi, flow_norm, w_qi, w_flow)
@@ -1342,6 +1480,8 @@ class PredatorBot:
 
         new_bid = round(new_bid + self._rl_offset, 2)
         new_ask = round(new_ask + self._rl_offset, 2)
+        new_bid = min(new_bid, round(ask_p - 0.01, 2))
+        new_ask = max(new_ask, round(bid_p + 0.01, 2))
         if new_ask <= new_bid:
             new_ask = round(new_bid + 0.01, 2)
 
@@ -1367,20 +1507,36 @@ class PredatorBot:
             outer_bid = round(new_bid - 0.01, 2)
             outer_ask = round(new_ask + 0.01, 2)
             ll = self._cfg.LAYER_LOTS
-            if allow_bid and outer_bid > 0:
-                self._qeng.submit_limit(trader, self._ticker, 'BID', outer_bid, ll)
-            if allow_ask:
-                self._qeng.submit_limit(trader, self._ticker, 'ASK', outer_ask, ll)
+            add_bid_cap = max(0, regime_qmax - q_lots)
+            add_ask_cap = max(0, regime_qmax + q_lots)
+            layer_bid_l = max(0, min(ll, add_bid_cap - bl_telem))
+            layer_ask_l = max(0, min(ll, add_ask_cap - al_telem))
+            if allow_bid and outer_bid > 0 and layer_bid_l > 0:
+                self._qeng.submit_limit(trader, self._ticker, 'BID', outer_bid, layer_bid_l)
+            if allow_ask and layer_ask_l > 0:
+                self._qeng.submit_limit(trader, self._ticker, 'ASK', outer_ask, layer_ask_l)
 
         if (not toxic_active
                 and tau > self._cfg.EOD_FLATTEN_START_S
+                and regime == RegimeDetector.CALM
                 and random.random() < self._cfg.DECOY_PROB):
             d_ticks = self._cfg.DECOY_TICKS * 0.01
             d_bid   = round(bid_p - d_ticks, 2)
             d_ask   = round(ask_p + d_ticks, 2)
-            if d_bid > 0:
+            effective_bl = bl_telem if allow_bid else 0
+            effective_al = al_telem if allow_ask else 0
+            layer_bid_submitted = (layer_bid_l
+                                   if (do_layer and allow_bid and outer_bid > 0 and layer_bid_l > 0)
+                                   else 0)
+            layer_ask_submitted = (layer_ask_l
+                                   if (do_layer and allow_ask and layer_ask_l > 0)
+                                   else 0)
+            decoy_bid_cap = max(0, regime_qmax - q_lots) - effective_bl - layer_bid_submitted
+            decoy_ask_cap = max(0, regime_qmax + q_lots) - effective_al - layer_ask_submitted
+            if allow_bid and d_bid > 0 and decoy_bid_cap >= 1:
                 self._qeng.submit_limit(trader, self._ticker, 'BID', d_bid, 1)
-            self._qeng.submit_limit(trader, self._ticker, 'ASK', d_ask, 1)
+            if allow_ask and decoy_ask_cap >= 1:
+                self._qeng.submit_limit(trader, self._ticker, 'ASK', d_ask, 1)
 
         self._last_bid     = new_bid
         self._last_ask     = new_ask
@@ -1414,14 +1570,13 @@ class PredatorBot:
             if elapsed_s > 120 and fill_proj < self._cfg.MIN_FILLS_SESSION:
                 print(f"  [WARN] proj={fill_proj:.0f} fills < {self._cfg.MIN_FILLS_SESSION}",
                       flush=True)
-        # ── end of tick() ──────────────────────────────────────────────────────
 
     def run(self, trader):
-        """Main loop — called once from main() on the SHIFT live platform."""
         print(
-            f"[PREDATOR v12] {self._ticker} "
+            f"[PREDATOR v18-FIXED] {self._ticker} "
             f"γ={self._cfg.GAMMA:.3f} k={self._cfg.K_BASE:.2f} "
-            f"αqi={self._cfg.ALPHA_QI} target_fills={self._cfg.TARGET_FILLS}",
+            f"αqi={self._cfg.ALPHA_QI} target_fills={self._cfg.TARGET_FILLS} "
+            f"inv_skew={self._cfg.INV_SKEW_COEFF} emerg={self._cfg.INV_EMERGENCY_LOTS}",
             flush=True)
         try:
             while self._market_open():
@@ -1435,7 +1590,7 @@ class PredatorBot:
                 self._qeng.cancel_all(trader, self._ticker)
                 q = self._q_cache
                 if abs(q) > 0:
-                    print(f"[PREDATOR v12] EOD flatten q={q}", flush=True)
+                    print(f"[PREDATOR v18-FIXED] EOD flatten q={q}", flush=True)
                     self._qeng.market_flatten(trader, self._ticker, q)
             except Exception:
                 pass
@@ -1448,7 +1603,7 @@ class PredatorBot:
                 self._spread_exp.best())
             self._logger.close()
             print(
-                f"[PREDATOR v12] Final PnL=${self._pnl_cache:,.2f} "
+                f"[PREDATOR v18-FIXED] Final PnL=${self._pnl_cache:,.2f} "
                 f"Fills={self._fill_cb.fill_count} "
                 f"Sharpe={self._sharpe.sharpe:.3f} "
                 f"BestExp={self._spread_exp.best():.1f}",
@@ -1457,7 +1612,7 @@ class PredatorBot:
 
 def main():
     import argparse
-    p = argparse.ArgumentParser(description="Predator v12 — HFTC-26 Competition Bot")
+    p = argparse.ArgumentParser(description="Predator v18-FIXED — HFTC-26 Competition Bot")
     p.add_argument("--ticker",   default="AAPL",      help="Ticker symbol")
     p.add_argument("--username", default=MY_USERNAME, help="SHIFT username")
     p.add_argument("--password", default=MY_PASSWORD, help="SHIFT password")
@@ -1502,21 +1657,20 @@ def main():
 
         _cbs = []
 
-        def _on_exec(cb):
-            _cbs.append(cb)
-            def _bridge(order):
-                for c in _cbs:
-                    try:
-                        c(trader, order.id)
-                    except Exception as e:
-                        print(f"[ExecCB] {e}", file=sys.stderr)
-            try:
-                trader.subExecutionNotice(_bridge)
-            except AttributeError:
-                print("[WARN] subExecutionNotice unavailable", file=sys.stderr)
+        def _exec_bridge(order):
+            for c in _cbs:
+                try:
+                    c(trader, order.id)
+                except Exception as e:
+                    print(f"[ExecCB] {e}", file=sys.stderr)
 
-        trader.on_execution_updated = _on_exec
-        trader.on_execution_updated(fill_cb)
+        _cbs.append(fill_cb)
+        try:
+            trader.subExecutionNotice(_exec_bridge)
+            print("[MAIN] Execution notice callback registered.", flush=True)
+        except AttributeError:
+            print("[WARN] subExecutionNotice unavailable — fills will not be tracked.",
+                  file=sys.stderr)
 
         bot.run(trader)
 
